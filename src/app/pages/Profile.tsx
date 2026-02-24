@@ -8,10 +8,24 @@ import { getUser, saveUser, logout, getTransactions } from '../utils/storage';
 import { exportToCSV, exportToPDF } from '../utils/export';
 import { User as UserIcon, DollarSign, Calendar, Database, AlertCircle, LogOut, FileText, FileSpreadsheet, Download } from 'lucide-react';
 import { toast } from 'sonner';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { auth } from '../utils/firebase';
+import { signOut } from 'firebase/auth';
 
 export function Profile() {
   const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      logout();
+      navigate('/login');
+      toast.success('Logged out successfully');
+    } catch (error: any) {
+      console.error(error);
+      toast.error('Logout failed');
+    }
+  };
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -51,10 +65,6 @@ export function Profile() {
     }
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const handleExportCSV = async () => {
     const transactions = getTransactions();

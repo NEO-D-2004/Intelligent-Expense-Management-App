@@ -5,6 +5,7 @@ import { Toaster } from './components/ui/sonner';
 import { initializeNotifications } from './utils/notifications';
 import { checkAndGenerateRecurringTransactions } from './utils/recurring';
 import { initializeDemoData } from './utils/storage';
+import { AuthProvider } from './context/AuthContext';
 
 export default function App() {
   useEffect(() => {
@@ -14,9 +15,9 @@ export default function App() {
   }, []);
 
   return (
-    <>
+    <AuthProvider>
       <RouterProvider router={router} />
       <Toaster position="top-right" />
-    </>
+    </AuthProvider>
   );
 }

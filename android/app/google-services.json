@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "906111355505",
+    "project_id": "smartexpense-expenzo",
+    "storage_bucket": "smartexpense-expenzo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:906111355505:android:7d31a3eac7dfd34b1629d0",
+        "android_client_info": {
+          "package_name": "com.kadha.expensemanager"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "906111355505-ok6qad0mjnnfg0738ta0m34ghscjc169.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBl5MfwLFXv4JSdjlaC3QcORUDkynhtGKc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "906111355505-i2p9s4ab7b9g8vih7t2lu0aoaiha17gt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
