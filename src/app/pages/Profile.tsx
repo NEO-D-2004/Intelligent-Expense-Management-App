@@ -11,9 +11,13 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { auth } from '../utils/firebase';
 import { signOut } from 'firebase/auth';
+import { useAuth } from '../context/AuthContext';
+import { useCurrency } from '../hooks/useCurrency';
 
 export function Profile() {
   const navigate = useNavigate();
+  const { updateUser } = useAuth();
+  const { currencySymbol } = useCurrency();
 
   const handleLogout = async () => {
     try {
@@ -60,7 +64,7 @@ export function Profile() {
         monthlyIncome: parseFloat(formData.monthlyIncome) || 0,
         salaryDay: parseInt(formData.salaryDay) || 1,
       };
-      saveUser(updatedUser);
+      updateUser(updatedUser);
       toast.success('Settings saved successfully!');
     }
   };
@@ -204,7 +208,7 @@ export function Profile() {
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="monthlyIncome">Monthly Income ($)</Label>
+                <Label htmlFor="monthlyIncome">Monthly Income ({currencySymbol})</Label>
                 <Input
                   id="monthlyIncome"
                   type="number"

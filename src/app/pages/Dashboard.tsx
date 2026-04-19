@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Progress } from '../components/ui/progress';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { useCurrency } from '../hooks/useCurrency';
 import { getTransactions, getBudgets, getGoals, getUser } from '../utils/storage';
 import {
   getTotalIncome,
@@ -31,8 +32,9 @@ export function Dashboard() {
   const [healthScore, setHealthScore] = useState(0);
   const [alerts, setAlerts] = useState<string[]>([]);
   const [user, setUser] = useState<any>(null);
+  const { formatCurrency } = useCurrency();
 
-  useEffect(() => {
+  const loadData = () => {
     const currentUser = getUser();
     setUser(currentUser);
 
@@ -57,6 +59,14 @@ export function Dashboard() {
 
     const spendingAlerts = detectSpendingSpikes(transactions);
     setAlerts(spendingAlerts);
+  };
+
+  useEffect(() => {
+    loadData();
+
+    // Listen for global updates (from FAB)
+    window.addEventListener('transaction-updated', loadData);
+    return () => window.removeEventListener('transaction-updated', loadData);
   }, []);
 
   const savings = income - expenses;
@@ -106,7 +116,7 @@ export function Dashboard() {
             <TrendingUp className="w-4 h-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">${income.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-green-600">{formatCurrency(income)}</div>
             <p className="text-xs text-gray-500 mt-1">This month</p>
           </CardContent>
         </Card>
@@ -117,7 +127,7 @@ export function Dashboard() {
             <TrendingDown className="w-4 h-4 text-red-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">${expenses.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-red-600">{formatCurrency(expenses)}</div>
             <p className="text-xs text-gray-500 mt-1">This month</p>
           </CardContent>
         </Card>
@@ -129,7 +139,7 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${savings >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-              ${savings.toFixed(2)}
+              {formatCurrency(savings)}
             </div>
             <p className="text-xs text-gray-500 mt-1">{savingsRate.toFixed(0)}% savings rate</p>
           </CardContent>
@@ -201,7 +211,7 @@ export function Dashboard() {
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">{budget.category}</span>
                       <span className="text-sm text-gray-600">
-                        ${budget.spent.toFixed(0)} / ${budget.limit.toFixed(0)}
+                        {formatCurrency(budget.spent)} / {formatCurrency(budget.limit)}
                       </span>
                     </div>
                     <Progress
@@ -216,7 +226,7 @@ export function Dashboard() {
                     <p className="text-xs text-gray-500 mt-1">
                       {percentage.toFixed(0)}% used
                       {isOverBudget && (
-                        <span className="text-red-600 ml-2">• Over budget by ${(budget.spent - budget.limit).toFixed(0)}</span>
+                        <span className="text-red-600 ml-2">• Over budget by {formatCurrency(budget.spent - budget.limit)}</span>
                       )}
                     </p>
                   </div>
@@ -259,7 +269,7 @@ export function Dashboard() {
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">{goal.name}</span>
                       <span className="text-sm text-gray-600">
-                        ${goal.currentAmount.toFixed(0)} / ${goal.targetAmount.toFixed(0)}
+                        {formatCurrency(goal.currentAmount)} / {formatCurrency(goal.targetAmount)}
                       </span>
                     </div>
                     <Progress value={percentage} className="h-2" />

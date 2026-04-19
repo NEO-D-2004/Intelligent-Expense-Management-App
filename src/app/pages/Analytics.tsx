@@ -20,6 +20,7 @@ import { EXPENSE_CATEGORIES } from '../types';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { TrendingUp, AlertTriangle, Lightbulb, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
+import { useCurrency } from '../hooks/useCurrency';
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#6366f1', '#84cc16'];
 
@@ -35,6 +36,7 @@ export function Analytics() {
     category: '',
     limit: '',
   });
+  const { formatCurrency, currencySymbol, convertToBase, convertAmount } = useCurrency();
 
   useEffect(() => {
     loadData();
@@ -88,7 +90,7 @@ export function Analytics() {
     if (existing) {
       updateBudget(existing.id, {
         ...existing,
-        limit: parseFloat(budgetForm.limit),
+        limit: convertToBase(parseFloat(budgetForm.limit)),
       });
       toast.success('Budget updated successfully');
     } else {
@@ -100,7 +102,7 @@ export function Analytics() {
       addBudget({
         id: Date.now().toString(),
         category: budgetForm.category,
-        limit: parseFloat(budgetForm.limit),
+        limit: convertToBase(parseFloat(budgetForm.limit)),
         month: currentMonth,
         spent,
       });
@@ -114,7 +116,7 @@ export function Analytics() {
 
   const handleSuggestBudget = (category: string) => {
     const suggested = suggestBudget(category);
-    setBudgetForm({ category, limit: suggested.toString() });
+    setBudgetForm({ category, limit: convertAmount(suggested).toFixed(2) });
   };
 
   return (
@@ -187,7 +189,7 @@ export function Analytics() {
                   <div className="text-sm text-orange-700 mt-1">{expense.description}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-bold text-orange-600">${expense.amount.toFixed(2)}</div>
+                  <div className="font-bold text-orange-600">{formatCurrency(expense.amount)}</div>
                   <div className="text-xs text-orange-500">potential savings</div>
                 </div>
               </div>
@@ -302,7 +304,7 @@ export function Analytics() {
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="limit">Monthly Limit ($)</Label>
+                      <Label htmlFor="limit">Monthly Limit ({currencySymbol})</Label>
                       {budgetForm.category && (
                         <Button
                           type="button"
@@ -381,7 +383,7 @@ export function Analytics() {
                     <CardContent className="space-y-3">
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">Spent</span>
-                        <span className="font-semibold">${budget.spent.toFixed(2)}</span>
+                        <span className="font-semibold">{formatCurrency(budget.spent)}</span>
                       </div>
                       <Progress
                         value={Math.min(percentage, 100)}
@@ -391,10 +393,10 @@ export function Analytics() {
                       />
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">Limit</span>
-                        <span className="font-semibold">${budget.limit.toFixed(2)}</span>
+                        <span className="font-semibold">{formatCurrency(budget.limit)}</span>
                       </div>
                       <div className={`text-sm font-medium ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {remaining >= 0 ? `$${remaining.toFixed(2)} remaining` : `Over budget by $${Math.abs(remaining).toFixed(2)}`}
+                        {remaining >= 0 ? `${formatCurrency(remaining)} remaining` : `Over budget by ${formatCurrency(Math.abs(remaining))}`}
                       </div>
                     </CardContent>
                   </Card>

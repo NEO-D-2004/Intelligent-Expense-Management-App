@@ -1,5 +1,7 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Budget } from '../types';
+import { formatCurrency } from './currency';
+import { getUser } from './storage';
 
 export const initializeNotifications = async () => {
     try {
@@ -45,6 +47,7 @@ export const scheduleDailyReminder = async () => {
 
 export const sendBudgetAlert = async (budget: Budget, spent: number) => {
     try {
+        const user = getUser();
         const percentage = (spent / budget.limit) * 100;
         // Unique ID based on budget ID to avoid spamming multiple identical alerts? 
         // Or just a random one. Let's use a hash of budget ID + date to show it once per day? 
@@ -54,7 +57,7 @@ export const sendBudgetAlert = async (budget: Budget, spent: number) => {
             notifications: [
                 {
                     title: 'Budget Alert ⚠️',
-                    body: `You've used ${percentage.toFixed(0)}% of your ${budget.category} budget! ($${spent} / $${budget.limit})`,
+                    body: `You've used ${percentage.toFixed(0)}% of your ${budget.category} budget! (${formatCurrency(spent, user?.currency || 'USD')} / ${formatCurrency(budget.limit, user?.currency || 'USD')})`,
                     id: Math.floor(Math.random() * 100000) + 2000, 
                     schedule: { at: new Date(Date.now() + 1000) }, // 1 second later
                     actionTypeId: '',

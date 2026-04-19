@@ -13,10 +13,12 @@ import {
   updateTransaction,
   deleteTransaction,
 } from '../utils/storage';
+import { AddTransactionDialog } from '../components/AddTransactionDialog';
 import { Transaction, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../types';
 import { Plus, Pencil, Trash2, TrendingUp, TrendingDown, Calendar, Filter, Camera, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { captureReceipt } from '../utils/camera';
+import { useCurrency } from '../hooks/useCurrency';
 
 export function Transactions() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -26,6 +28,7 @@ export function Transactions() {
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const { formatCurrency, currencySymbol, convertAmount, convertToBase } = useCurrency();
 
   // Form state
   const [formData, setFormData] = useState({
@@ -42,6 +45,10 @@ export function Transactions() {
 
   useEffect(() => {
     loadTransactions();
+    
+    // Listen for global updates (from FAB)
+    window.addEventListener('transaction-updated', loadTransactions);
+    return () => window.removeEventListener('transaction-updated', loadTransactions);
   }, []);
 
   useEffect(() => {
@@ -103,7 +110,7 @@ export function Transactions() {
     const transaction: Transaction = {
       id: editingTransaction?.id || Date.now().toString(),
       type: formData.type,
-      amount: parseFloat(formData.amount),
+      amount: convertToBase(parseFloat(formData.amount)),
       category: formData.category,
       description: formData.description,
       date: formData.date,
@@ -130,7 +137,7 @@ export function Transactions() {
     setEditingTransaction(transaction);
     setFormData({
       type: transaction.type,
-      amount: transaction.amount.toString(),
+      amount: convertAmount(transaction.amount).toFixed(2),
       category: transaction.category,
       description: transaction.description,
       date: transaction.date,
@@ -173,166 +180,22 @@ export function Transactions() {
           <p className="text-gray-600 mt-1">Track and manage all your income and expenses</p>
         </div>
         <div className="flex gap-2">
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={resetForm}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Transaction
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add New Transaction'}</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Type</Label>
-                  <Select
-                    value={formData.type}
-                    onValueChange={(value: 'income' | 'expense') =>
-                      setFormData({ ...formData, type: value, category: '' })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="income">Income</SelectItem>
-                      <SelectItem value="expense">Expense</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Amount ($)</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={formData.amount}
-                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Category</Label>
-                  <Select
-                    value={formData.category}
-                    onValueChange={(value) => setFormData({ ...formData, category: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Input
-                    id="description"
-                    placeholder="What was this for?"
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="date">Date</Label>
-                  <Input
-                    id="date"
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="tags">Tags (comma separated)</Label>
-                  <Input
-                    id="tags"
-                    placeholder="work, travel, gifts"
-                    value={formData.tags}
-                    onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-                  />
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    id="recurring"
-                    checked={formData.isRecurring}
-                    onChange={(e) => setFormData({ ...formData, isRecurring: e.target.checked })}
-                    className="rounded"
-                  />
-                  <Label htmlFor="recurring" className="cursor-pointer">
-                    Recurring transaction
-                  </Label>
-                </div>
-
-                {formData.isRecurring && (
-                  <div className="space-y-2 pl-6 border-l-2 border-gray-200">
-                    <Label>Recurrence Interval</Label>
-                    <Select
-                      value={formData.recurringInterval}
-                      onValueChange={(value) => setFormData({ ...formData, recurringInterval: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="daily">Daily</SelectItem>
-                        <SelectItem value="weekly">Weekly</SelectItem>
-                        <SelectItem value="monthly">Monthly</SelectItem>
-                        <SelectItem value="yearly">Yearly</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <Label>Receipt</Label>
-                  <div className="flex items-center gap-4">
-                    <Button type="button" variant="outline" onClick={handleCaptureReceipt}>
-                      <Camera className="w-4 h-4 mr-2" />
-                      {formData.receiptUrl ? 'Change Receipt' : 'Attach Receipt'}
-                    </Button>
-                    {formData.receiptUrl && (
-                      <div className="text-sm text-green-600 flex items-center">
-                        ✓ Receipt Attached
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button type="submit" className="flex-1">
-                    {editingTransaction ? 'Update' : 'Add'} Transaction
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      setIsAddDialogOpen(false);
-                      resetForm();
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+        <div className="flex gap-2">
+          <Button onClick={() => {
+            resetForm();
+            setIsAddDialogOpen(true);
+          }}>
+            <Plus className="w-4 h-4 mr-2" />
+            Add Transaction
+          </Button>
+          
+          <AddTransactionDialog 
+            open={isAddDialogOpen}
+            onOpenChange={setIsAddDialogOpen}
+            editingTransaction={editingTransaction}
+            onSuccess={loadTransactions}
+          />
+        </div>
 
         </div>
       </div>
@@ -462,7 +325,7 @@ export function Transactions() {
                         className={`text-right font-semibold ${transaction.type === 'income' ? 'text-green-600' : 'text-red-600'
                           }`}
                       >
-                        {transaction.type === 'income' ? '+' : '-'}${transaction.amount.toFixed(2)}
+                        {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount)}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">

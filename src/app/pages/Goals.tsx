@@ -10,6 +10,7 @@ import { getGoals, addGoal, updateGoal, deleteGoal } from '../utils/storage';
 import { SavingsGoal } from '../types';
 import { Target, Plus, Trash2, TrendingUp, Calendar, DollarSign, Trophy } from 'lucide-react';
 import { toast } from 'sonner';
+import { useCurrency } from '../hooks/useCurrency';
 
 export function Goals() {
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
@@ -20,6 +21,7 @@ export function Goals() {
     currentAmount: '',
     deadline: '',
   });
+  const { formatCurrency, currencySymbol, convertToBase } = useCurrency();
 
   useEffect(() => {
     loadGoals();
@@ -41,8 +43,8 @@ export function Goals() {
     const goal: SavingsGoal = {
       id: Date.now().toString(),
       name: formData.name,
-      targetAmount: parseFloat(formData.targetAmount),
-      currentAmount: parseFloat(formData.currentAmount) || 0,
+      targetAmount: convertToBase(parseFloat(formData.targetAmount)),
+      currentAmount: convertToBase(parseFloat(formData.currentAmount) || 0),
       deadline: formData.deadline,
       createdAt: new Date().toISOString(),
     };
@@ -68,11 +70,11 @@ export function Goals() {
     if (goal) {
       const updatedGoal = {
         ...goal,
-        currentAmount: goal.currentAmount + amount,
+        currentAmount: goal.currentAmount + convertToBase(amount),
       };
       updateGoal(goalId, updatedGoal);
       loadGoals();
-      toast.success(`Added $${amount} to ${goal.name}!`);
+      toast.success(`Added ${formatCurrency(amount)} to ${goal.name}!`);
     }
   };
 
@@ -133,7 +135,7 @@ export function Goals() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="targetAmount">Target Amount ($)</Label>
+                <Label htmlFor="targetAmount">Target Amount ({currencySymbol})</Label>
                 <Input
                   id="targetAmount"
                   type="number"
@@ -146,7 +148,7 @@ export function Goals() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="currentAmount">Current Amount ($)</Label>
+                <Label htmlFor="currentAmount">Current Amount ({currencySymbol})</Label>
                 <Input
                   id="currentAmount"
                   type="number"
@@ -238,7 +240,7 @@ export function Goals() {
                     <div className="flex justify-between text-sm mb-2">
                       <span className="font-medium">Progress</span>
                       <span className="text-gray-600">
-                        ${goal.currentAmount.toFixed(2)} / ${goal.targetAmount.toFixed(2)}
+                        {formatCurrency(goal.currentAmount)} / {formatCurrency(goal.targetAmount)}
                       </span>
                     </div>
                     <Progress value={Math.min(progress, 100)} className="h-3" />
@@ -264,11 +266,11 @@ export function Goals() {
                       <div>
                         <div className="text-xs text-gray-500">Remaining</div>
                         <div className="text-sm font-medium">
-                          ${(goal.targetAmount - goal.currentAmount).toFixed(2)}
+                          {formatCurrency(goal.targetAmount - goal.currentAmount)}
                         </div>
                         {!isComplete && (
                           <div className="text-xs text-blue-600">
-                            ${monthlyRequired.toFixed(2)}/month
+                            {formatCurrency(monthlyRequired)}/month
                           </div>
                         )}
                       </div>
@@ -286,7 +288,7 @@ export function Goals() {
                           onClick={() => handleAddFunds(goal.id, 50)}
                           className="flex-1"
                         >
-                          +$50
+                          +{formatCurrency(50)}
                         </Button>
                         <Button
                           size="sm"
@@ -294,7 +296,7 @@ export function Goals() {
                           onClick={() => handleAddFunds(goal.id, 100)}
                           className="flex-1"
                         >
-                          +$100
+                          +{formatCurrency(100)}
                         </Button>
                         <Button
                           size="sm"
@@ -302,7 +304,7 @@ export function Goals() {
                           onClick={() => handleAddFunds(goal.id, 500)}
                           className="flex-1"
                         >
-                          +$500
+                          +{formatCurrency(500)}
                         </Button>
                       </div>
                     </div>

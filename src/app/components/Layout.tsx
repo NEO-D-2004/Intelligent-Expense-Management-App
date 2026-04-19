@@ -7,9 +7,13 @@ import {
   Bot,
   User as UserIcon,
 } from 'lucide-react';
+import { useState } from 'react';
+import { DraggableFAB } from './DraggableFAB';
+import { AddTransactionDialog } from './AddTransactionDialog';
 
 export function Layout() {
   const location = useLocation();
+  const [isTransactionDialogOpen, setIsTransactionDialogOpen] = useState(false);
 
   const navItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -134,6 +138,13 @@ export function Layout() {
           })}
         </nav>
       </div>
+
+      {/* Global Action Elements */}
+      <DraggableFAB onClick={() => setIsTransactionDialogOpen(true)} />
+      <AddTransactionDialog 
+        open={isTransactionDialogOpen} 
+        onOpenChange={setIsTransactionDialogOpen} 
+      />
     </div>
   );
 }

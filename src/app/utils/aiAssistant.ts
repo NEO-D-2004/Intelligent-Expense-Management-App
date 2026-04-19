@@ -1,4 +1,5 @@
 import { getTransactions, getBudgets, getGoals, getUser } from './storage';
+import { formatCurrency as formatCurrencyUtil, getExchangeRatesSync, convertCurrency } from './currency';
 import {
   getTotalIncome,
   getTotalExpenses,
@@ -25,7 +26,13 @@ const FINANCIAL_TIPS = [
 
 const getRandomTip = () => FINANCIAL_TIPS[Math.floor(Math.random() * FINANCIAL_TIPS.length)];
 
-const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;
+const formatCurrency = (amount: number) => {
+  const user = getUser();
+  const rates = getExchangeRatesSync();
+  const targetCurrency = user?.currency || 'USD';
+  const converted = convertCurrency(amount, targetCurrency, rates);
+  return formatCurrencyUtil(converted, targetCurrency);
+};
 
 export const processQuery = (query: string): string => {
   const lowerQuery = query.toLowerCase();
@@ -120,7 +127,7 @@ export const processQuery = (query: string): string => {
     budgets.forEach(b => {
       const percentage = (b.spent / b.limit) * 100;
       const status = percentage > 100 ? '⚠️ Over budget!' : percentage > 80 ? '⚡ Close to limit' : '✅ On track';
-      response += `• ${b.category}: $${b.spent}/$${b.limit} (${percentage.toFixed(0)}%) ${status}\n`;
+      response += `• ${b.category}: ${formatCurrency(b.spent)}/${formatCurrency(b.limit)} (${percentage.toFixed(0)}%) ${status}\n`;
     });
     return response;
   }
@@ -145,7 +152,7 @@ export const processQuery = (query: string): string => {
     if (wasteful.length > 0) {
       response += '\n💡 Potential savings opportunities:\n\n';
       wasteful.forEach(w => {
-        response += `• ${w.category}: $${w.amount.toFixed(2)} - ${w.description}\n`;
+        response += `• ${w.category}: ${formatCurrency(w.amount)} - ${w.description}\n`;
       });
     }
 

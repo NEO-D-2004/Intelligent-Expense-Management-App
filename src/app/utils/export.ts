@@ -5,8 +5,13 @@ import { format } from 'date-fns';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { Capacitor } from '@capacitor/core';
+import { formatCurrency, getExchangeRatesSync, convertCurrency } from './currency';
+import { getUser } from './storage';
 
 export const exportToCSV = async (transactions: Transaction[]) => {
+    const user = getUser();
+    const rates = getExchangeRatesSync();
+    const targetCurrency = user?.currency || 'USD';
     const headers = ['Date', 'Type', 'Category', 'Description', 'Amount', 'Recurring'];
     const csvContent = [
         headers.join(','),
@@ -16,7 +21,7 @@ export const exportToCSV = async (transactions: Transaction[]) => {
                 t.type,
                 `"${t.category}"`, // Quote to handle commas
                 `"${t.description.replace(/"/g, '""')}"`, // Escape quotes
-                t.amount.toFixed(2),
+                convertCurrency(t.amount, targetCurrency, rates).toFixed(2),
                 t.isRecurring ? 'Yes' : 'No',
             ].join(',')
         ),
@@ -65,12 +70,16 @@ export const exportToPDF = async (transactions: Transaction[]) => {
     doc.setFontSize(11);
     doc.text(`Generated on: ${format(new Date(), 'PPpp')}`, 14, 28);
 
+    const user = getUser();
+    const rates = getExchangeRatesSync();
+    const targetCurrency = user?.currency || 'USD';
+
     const tableData = transactions.map((t) => [
         t.date,
         t.type,
         t.category,
         t.description,
-        `$${t.amount.toFixed(2)}`,
+        formatCurrency(convertCurrency(t.amount, targetCurrency, rates), targetCurrency),
         t.isRecurring ? 'Yes' : 'No',
     ]);
 
