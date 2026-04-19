@@ -1,0 +1,1425 @@
+# Intelligent Expense Management App - Main Modules & Engines
+
+This document provides a concise breakdown of the primary modules, engines, and utilities of the application.  Each section includes a short description and the full source code of the corresponding file, suitable for including in project reports.
+
+---
+
+## 1. `App.tsx` (Entry Point)
+**Description:** Initializes the application by running startup routines (demo data, recurring checks, notifications) and sets up routing within an `AuthProvider` context.
+
+```tsx
+import { useEffect } from 'react';
+import { RouterProvider } from 'react-router-dom';
+import { router } from './routes';
+import { Toaster } from './components/ui/sonner';
+import { initializeNotifications } from './utils/notifications';
+import { checkAndGenerateRecurringTransactions } from './utils/recurring';
+import { initializeDemoData } from './utils/storage';
+import { AuthProvider } from './context/AuthContext';
+
+export default function App() {
+  useEffect(() => {
+    initializeDemoData();
+    checkAndGenerateRecurringTransactions();
+    initializeNotifications();
+  }, []);
+
+  return (
+    <AuthProvider>
+      <RouterProvider router={router} />
+      <Toaster position="top-right" />
+    </AuthProvider>
+  );
+}
+```
+
+---
+
+## 2. `routes.tsx` (Routing Configuration)
+**Description:** Defines protected and public routes using React Router; determines navigation flow between pages like Dashboard, Transactions, etc.
+
+```tsx
+import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { Layout } from './components/Layout';
+import { Login } from './pages/Login';
+import { Dashboard } from './pages/Dashboard';
+import { Transactions } from './pages/Transactions';
+import { Analytics } from './pages/Analytics';
+import { Goals } from './pages/Goals';
+import { Assistant } from './pages/Assistant';
+import { Profile } from './pages/Profile';
+import { isLoggedIn } from './utils/storage';
+
+// Protected route wrapper
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  if (!isLoggedIn()) {
+    return <Navigate to="/login" replace />;
+  }
+  return <>{children}</>;
+}
+
+// Public route wrapper (redirect to dashboard if logged in)
+function PublicRoute({ children }: { children: React.ReactNode }) {
+  if (isLoggedIn()) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
+export const router = createBrowserRouter([
+  {
+    path: '/login',
+    element: (
+      <PublicRoute>
+        <Login />
+      </PublicRoute>
+    ),
+  },
+  {
+    path: '/',
+    element: (
+      <ProtectedRoute>
+        <Layout />
+      </ProtectedRoute>
+    ),
+    children: [
+      {
+        index: true,
+        element: <Dashboard />, 
+      },
+      {
+        path: 'transactions',
+        element: <Transactions />, 
+      },
+      {
+        path: 'analytics',
+        element: <Analytics />, 
+      },
+      {
+        path: 'goals',
+        element: <Goals />, 
+      },
+      {
+        path: 'assistant',
+        element: <Assistant />, 
+      },
+      {
+        path: 'profile',
+        element: <Profile />, 
+      },
+    ],
+  },
+  {
+    path: '*',
+    element: <Navigate to="/" replace />, 
+  },
+]);
+```
+
+---
+
+## 3. `AuthContext.tsx` (Authentication Context)
+**Description:** Wraps application components with user authentication state obtained from Firebase, syncing with local storage.
+
+```tsx
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../utils/firebase';
+import { User } from '../types';
+import { saveUser, getUser, logout as storageLogout } from '../utils/storage';
+
+interface AuthContextType {
+    user: User | null;
+    loading: boolean;
+}
+
+const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const [user, setUser] = useState<User | null>(getUser());
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+            if (firebaseUser) {
+                // Map Firebase user to our internal User type
+                const appUser: User = {
+                    id: firebaseUser.uid,
+                    email: firebaseUser.email || '',
+                    name: firebaseUser.displayName || 'User',
+                    currency: 'USD', // Default or fetch from profile if we had one
+                    monthlyIncome: 0,
+                    salaryDay: 1,
+                };
+
+                // Save to storage to maintain compatibility with existing utils
+                saveUser(appUser);
+                setUser(appUser);
+            } else {
+                storageLogout();
+                setUser(null);
+            }
+            setLoading(false);
+        });
+
+        return unsubscribe;
+    }, []);
+
+    return (
+        <AuthContext.Provider value={{ user, loading }}>
+            {!loading && children}
+        </AuthContext.Provider>
+    );
+};
+```
+
+---
+
+## 4. `firebase.ts` (Firebase Initialization)
+**Description:** Configures Firebase app and authentication providers using environment variables.
+
+```typescript
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
+
+const firebaseConfig = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+
+export default app;
+```
+
+---
+
+## 5. `storage.ts` (Local Storage Engine)
+**Description:** Manages persistence of users, transactions, budgets, and goals. Includes helper functions, budget alerts, demo data initialization, and migrations.
+
+```typescript
+import { User, Transaction, Budget, SavingsGoal } from '../types';
+import { sendBudgetAlert } from './notifications';
+
+const STORAGE_KEYS = {
+  USER: 'expense_tracker_user',
+  TRANSACTIONS: 'expense_tracker_transactions',
+  BUDGETS: 'expense_tracker_budgets',
+  GOALS: 'expense_tracker_goals',
+  IS_LOGGED_IN: 'expense_tracker_logged_in',
+};
+
+// User operations
+export const saveUser = (user: User) => {
+  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+  localStorage.setItem(STORAGE_KEYS.IS_LOGGED_IN, 'true');
+};
+
+export const getUser = (): User | null => {
+  const userStr = localStorage.getItem(STORAGE_KEYS.USER);
+  return userStr ? JSON.parse(userStr) : null;
+};
+
+export const isLoggedIn = (): boolean => {
+  return localStorage.getItem(STORAGE_KEYS.IS_LOGGED_IN) === 'true';
+};
+
+export const logout = () => {
+  localStorage.removeItem(STORAGE_KEYS.IS_LOGGED_IN);
+};
+
+// Transaction operations
+export const saveTransactions = (transactions: Transaction[]) => {
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+};
+
+export const getTransactions = (): Transaction[] => {
+  const transactionsStr = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+  return transactionsStr ? JSON.parse(transactionsStr) : [];
+};
+
+export const addTransaction = (transaction: Transaction) => {
+  const transactions = getTransactions();
+  transactions.push(transaction);
+  saveTransactions(transactions);
+  checkBudgetAlerts(transaction);
+};
+
+export const updateTransaction = (id: string, updatedTransaction: Transaction) => {
+  const transactions = getTransactions();
+  const index = transactions.findIndex(t => t.id === id);
+  if (index !== -1) {
+    transactions[index] = updatedTransaction;
+    saveTransactions(transactions);
+    checkBudgetAlerts(updatedTransaction);
+  }
+};
+
+export const deleteTransaction = (id: string) => {
+  const transactions = getTransactions();
+  const filtered = transactions.filter(t => t.id !== id);
+  saveTransactions(filtered);
+};
+
+// Check for budget alerts
+export const checkBudgetAlerts = (transaction: Transaction) => {
+  if (transaction.type !== 'expense') return;
+
+  const budgets = getBudgets();
+  const budget = budgets.find(b => b.category === transaction.category); // Simple matching for now
+
+  if (budget) {
+    // Calculate total spent for this category in the current month
+    // Note: The 'budget.spent' field in the Budget interface seems to be a pre-calculated value? 
+    // Or is it supposed to be dynamic? 
+    // Looking at the demo data, 'spent' is hardcoded. 
+    // Ideally, we should recalculate 'spent' based on transactions.
+    // Let's do a quick calculation here to be accurate.
+
+    // Extract month from transaction date (YYYY-MM)
+    const transactionMonth = transaction.date.substring(0, 7);
+
+    // Only check if the transaction matches the budget's month
+    if (budget.month === transactionMonth) {
+      const transactions = getTransactions();
+      const totalSpent = transactions
+        .filter(t => t.type === 'expense' && t.category === transaction.category && t.date.startsWith(transactionMonth))
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      // Check if exceeded 80%
+      if (totalSpent >= budget.limit * 0.8) {
+        sendBudgetAlert(budget, totalSpent);
+      }
+    }
+  }
+};
+
+// Budget operations
+export const saveBudgets = (budgets: Budget[]) => {
+  localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgets));
+};
+
+export const getBudgets = (): Budget[] => {
+  const budgetsStr = localStorage.getItem(STORAGE_KEYS.BUDGETS);
+  return budgetsStr ? JSON.parse(budgetsStr) : [];
+};
+
+export const addBudget = (budget: Budget) => {
+  const budgets = getBudgets();
+  budgets.push(budget);
+  saveBudgets(budgets);
+};
+
+export const updateBudget = (id: string, updatedBudget: Budget) => {
+  const budgets = getBudgets();
+  const index = budgets.findIndex(b => b.id === id);
+  if (index !== -1) {
+    budgets[index] = updatedBudget;
+    saveBudgets(budgets);
+  }
+};
+
+// Goals operations
+export const saveGoals = (goals: SavingsGoal[]) => {
+  localStorage.setItem(STORAGE_KEYS.GOALS, JSON.stringify(goals));
+};
+
+export const getGoals = (): SavingsGoal[] => {
+  const goalsStr = localStorage.getItem(STORAGE_KEYS.GOALS);
+  return goalsStr ? JSON.parse(goalsStr) : [];
+};
+
+export const addGoal = (goal: SavingsGoal) => {
+  const goals = getGoals();
+  goals.push(goal);
+  saveGoals(goals);
+};
+
+export const updateGoal = (id: string, updatedGoal: SavingsGoal) => {
+  const goals = getGoals();
+  const index = goals.findIndex(g => g.id === id);
+  if (index !== -1) {
+    goals[index] = updatedGoal;
+    saveGoals(goals);
+  }
+};
+
+export const deleteGoal = (id: string) => {
+  const goals = getGoals();
+  const filtered = goals.filter(g => g.id !== id);
+  saveGoals(filtered);
+};
+
+// Migration to ensure data consistency
+const migrateData = () => {
+  const transactions = getTransactions();
+  let hasChanges = false;
+
+  const migratedTransactions = transactions.map(t => {
+    if (t.isRecurring && !t.recurringInterval) {
+      hasChanges = true;
+      return { ...t, recurringInterval: 'monthly' as const };
+    }
+    return t;
+  });
+
+  if (hasChanges) {
+    saveTransactions(migratedTransactions);
+    console.log('Migrated transactions to include recurringInterval');
+  }
+};
+
+export const initializeDemoData = () => {
+  if (!isLoggedIn()) return;
+
+  // Run migrations first
+  migrateData();
+
+  const transactions = getTransactions();
+  if (transactions.length === 0) {
+    const demoTransactions: Transaction[] = [
+      {
+        id: '1',
+        type: 'income',
+        amount: 5000,
+        category: 'Salary',
+        description: 'Monthly Salary',
+        date: '2026-02-01',
+        tags: ['salary'],
+        isRecurring: true,
+        recurringInterval: 'monthly',
+      },
+      {
+        id: '2',
+        type: 'expense',
+        amount: 450,
+        category: 'Food & Dining',
+        description: 'Grocery shopping',
+        date: '2026-02-15',
+        tags: ['groceries'],
+        isRecurring: false,
+      },
+      {
+        id: '3',
+        type: 'expense',
+        amount: 80,
+        category: 'Transportation',
+        description: 'Uber rides',
+        date: '2026-02-14',
+        tags: ['transport'],
+        isRecurring: false,
+      },
+      {
+        id: '4',
+        type: 'expense',
+        amount: 200,
+        category: 'Bills & Utilities',
+        description: 'Electricity bill',
+        date: '2026-02-10',
+        tags: ['utilities'],
+        isRecurring: true,
+        recurringInterval: 'monthly',
+      },
+      {
+        id: '5',
+        type: 'expense',
+        amount: 120,
+        category: 'Entertainment',
+        description: 'Netflix, Spotify subscriptions',
+        date: '2026-02-05',
+        tags: ['subscriptions'],
+        isRecurring: true,
+        recurringInterval: 'monthly',
+      },
+    ];
+    saveTransactions(demoTransactions);
+  }
+
+  const budgets = getBudgets();
+  if (budgets.length === 0) {
+    const demoBudgets: Budget[] = [
+      {
+        id: '1',
+        category: 'Food & Dining',
+        limit: 600,
+        month: '2026-02',
+        spent: 450,
+      },
+      {
+        id: '2',
+        category: 'Transportation',
+        limit: 200,
+        month: '2026-02',
+        spent: 80,
+      },
+      {
+        id: '3',
+        category: 'Entertainment',
+        limit: 150,
+        month: '2026-02',
+        spent: 120,
+      },
+    ];
+    saveBudgets(demoBudgets);
+  }
+
+  const goals = getGoals();
+  if (goals.length === 0) {
+    const demoGoals: SavingsGoal[] = [
+      {
+        id: '1',
+        name: 'Emergency Fund',
+        targetAmount: 10000,
+        currentAmount: 3500,
+        deadline: '2026-12-31',
+        createdAt: '2026-01-01',
+      },
+      {
+        id: '2',
+        name: 'Vacation to Europe',
+        targetAmount: 5000,
+        currentAmount: 1200,
+        deadline: '2026-08-01',
+        createdAt: '2026-01-15',
+      },
+    ];
+    saveGoals(demoGoals);
+  }
+};
+```
+
+---
+
+## 6. `analytics.ts` (Analytics Engine)
+**Description:** Provides financial calculation helpers: totals, trends, detection algorithms, health score, suggestions.
+
+```typescript
+import { Transaction, Budget, SavingsGoal, FinancialHealthScore } from '../types';
+import { getTransactions, getBudgets, getGoals } from './storage';
+
+export const getDateRange = (range: 'daily' | 'weekly' | 'monthly' | 'yearly') => {
+  const now = new Date();
+  const start = new Date();
+
+  switch (range) {
+    case 'daily':
+      start.setHours(0, 0, 0, 0);
+      break;
+    case 'weekly':
+      start.setDate(now.getDate() - 7);
+      break;
+    case 'monthly':
+      start.setMonth(now.getMonth() - 1);
+      break;
+    case 'yearly':
+      start.setFullYear(now.getFullYear() - 1);
+      break;
+  }
+
+  return { start, end: now };
+};
+
+export const filterTransactionsByDateRange = (
+  transactions: Transaction[],
+  start: Date,
+  end: Date
+): Transaction[] => {
+  return transactions.filter(t => {
+    const date = new Date(t.date);
+    return date >= start && date <= end;
+  });
+};
+
+export const getTotalIncome = (transactions: Transaction[]): number => {
+  return transactions
+    .filter(t => t.type === 'income')
+    .reduce((sum, t) => sum + t.amount, 0);
+};
+
+export const getTotalExpenses = (transactions: Transaction[]): number => {
+  return transactions
+    .filter(t => t.type === 'expense')
+    .reduce((sum, t) => sum + t.amount, 0);
+};
+
+export const getExpensesByCategory = (transactions: Transaction[]): Record<string, number> => {
+  const expenses = transactions.filter(t => t.type === 'expense');
+  const byCategory: Record<string, number> = {};
+
+  expenses.forEach(t => {
+    byCategory[t.category] = (byCategory[t.category] || 0) + t.amount;
+  });
+
+  return byCategory;
+};
+
+export const getMonthlyTrend = (transactions: Transaction[], months: number = 6) => {
+  const trend: Array<{ month: string; income: number; expenses: number }> = [];
+  const now = new Date();
+
+  for (let i = months - 1; i >= 0; i--) {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const monthStr = date.toISOString().slice(0, 7);
+    
+    const monthTransactions = transactions.filter(t => t.date.startsWith(monthStr));
+    
+    trend.push({
+      month: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      income: getTotalIncome(monthTransactions),
+      expenses: getTotalExpenses(monthTransactions),
+    });
+  }
+
+  return trend;
+};
+
+export const detectSpendingSpikes = (transactions: Transaction[]): string[] => {
+  const alerts: string[] = [];
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const lastMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+
+  const currentExpenses = getExpensesByCategory(
+    transactions.filter(t => t.date.startsWith(currentMonth))
+  );
+  const lastMonthExpenses = getExpensesByCategory(
+    transactions.filter(t => t.date.startsWith(lastMonth))
+  );
+
+  Object.keys(currentExpenses).forEach(category => {
+    const current = currentExpenses[category];
+    const previous = lastMonthExpenses[category] || 0;
+    
+    if (previous > 0) {
+      const increase = ((current - previous) / previous) * 100;
+      if (increase > 30) {
+        alerts.push(
+          `Your ${category} spending increased ${increase.toFixed(0)}% compared to last month.`
+        );
+      }
+    }
+  });
+
+  return alerts;
+};
+
+export const detectWastefulExpenses = (transactions: Transaction[]): Array<{
+  category: string;
+  amount: number;
+  description: string;
+}> => {
+  const wastefulKeywords = [
+    'impulse',
+    'unnecessary',
+    'food delivery',
+    'late night',
+    'subscription',
+    'unused',
+  ];
+
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const expenses = transactions.filter(
+    t => t.type === 'expense' && t.date.startsWith(currentMonth)
+  );
+
+  // Identify frequent small expenses that add up
+  const categoryFrequency: Record<string, { count: number; total: number }> = {};
+  
+  expenses.forEach(t => {
+    const key = t.category;
+    if (!categoryFrequency[key]) {
+      categoryFrequency[key] = { count: 0, total: 0 };
+    }
+    categoryFrequency[key].count++;
+    categoryFrequency[key].total += t.amount;
+  });
+
+  const wasteful: Array<{ category: string; amount: number; description: string }> = [];
+
+  // High frequency, low value expenses (potential wasteful spending)
+  Object.entries(categoryFrequency).forEach(([category, data]) => {
+    if (category === 'Food & Dining' && data.count > 15) {
+      wasteful.push({
+        category,
+        amount: data.total,
+        description: `${data.count} food expenses this month. Consider meal planning.`,
+      });
+    }
+    if (category === 'Entertainment' && data.total > 300) {
+      wasteful.push({
+        category,
+        amount: data.total,
+        description: 'High entertainment spending. Review subscriptions.',
+      });
+    }
+  });
+
+  return wasteful;
+};
+
+export const calculateFinancialHealthScore = (): FinancialHealthScore => {
+  const transactions = getTransactions();
+  const budgets = getBudgets();
+  const goals = getGoals();
+
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const monthTransactions = transactions.filter(t => t.date.startsWith(currentMonth));
+
+  const income = getTotalIncome(monthTransactions);
+  const expenses = getTotalExpenses(monthTransactions);
+  const savings = income - expenses;
+
+  // 1. Savings Ratio (30 points)
+  const savingsRatio = income > 0 ? Math.min((savings / income) * 100, 30) : 0;
+
+  // 2. Budget Adherence (30 points)
+  const currentBudgets = budgets.filter(b => b.month === currentMonth);
+  let budgetScore = 30;
+  currentBudgets.forEach(b => {
+    if (b.spent > b.limit) {
+      budgetScore -= 5;
+    }
+  });
+  budgetScore = Math.max(budgetScore, 0);
+
+  // 3. Expense Volatility (20 points) - lower volatility is better
+  const last3Months = getMonthlyTrend(transactions, 3);
+  const expenseValues = last3Months.map(m => m.expenses);
+  const avgExpense = expenseValues.reduce((a, b) => a + b, 0) / expenseValues.length;
+  const variance = expenseValues.reduce((sum, val) => sum + Math.pow(val - avgExpense, 2), 0) / expenseValues.length;
+  const volatility = avgExpense > 0 ? (variance / avgExpense) : 0;
+  const volatilityScore = Math.max(20 - volatility * 10, 0);
+
+  // 4. Goal Consistency (20 points)
+  let goalScore = 0;
+  goals.forEach(goal => {
+    const progress = (goal.currentAmount / goal.targetAmount) * 100;
+    goalScore += Math.min(progress / goals.length, 20 / goals.length);
+  });
+
+  const totalScore = Math.round(savingsRatio + budgetScore + volatilityScore + goalScore);
+
+  return {
+    score: Math.min(totalScore, 100),
+    savingsRatio: Math.round(savingsRatio),
+    budgetAdherence: Math.round(budgetScore),
+    expenseVolatility: Math.round(volatilityScore),
+    goalConsistency: Math.round(goalScore),
+  };
+};
+
+export const suggestBudget = (category: string): number => {
+  const transactions = getTransactions();
+  const last3Months = transactions.filter(t => {
+    const date = new Date(t.date);
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    return date >= threeMonthsAgo && t.type === 'expense' && t.category === category;
+  });
+
+  if (last3Months.length === 0) return 500; // default suggestion
+
+  const total = last3Months.reduce((sum, t) => sum + t.amount, 0);
+  const average = total / 3;
+  
+  // Suggest 10% buffer
+  return Math.round(average * 1.1);
+};
+```
+
+---
+
+## 7. `aiAssistant.ts` (AI Assistant Engine)
+**Description:** Processes natural-language queries about the user's finances and furnishes insights, tips and summaries using stored data and analytics functions.
+
+```typescript
+import { getTransactions, getBudgets, getGoals, getUser } from './storage';
+import {
+  getTotalIncome,
+  getTotalExpenses,
+  getExpensesByCategory,
+  calculateFinancialHealthScore,
+  detectSpendingSpikes,
+  detectWastefulExpenses,
+} from './analytics';
+
+const FINANCIAL_TIPS = [
+  "Track every expense, no matter how small. Small expenses add up!",
+  "Follow the 50/30/20 rule: 50% needs, 30% wants, 20% savings.",
+  "Automate your savings by setting up automatic transfers.",
+  "Review subscriptions monthly - cancel what you don't use.",
+  "Use the 24-hour rule: wait a day before making non-essential purchases.",
+  "Cook at home more often - dining out is a major expense category.",
+  "Set specific, measurable savings goals to stay motivated.",
+  "Build an emergency fund covering 3-6 months of expenses.",
+  "Pay off high-interest debt first (avalanche method).",
+  "Use cash for discretionary spending to limit impulse buys.",
+  "Negotiate your bills (internet, insurance) annually.",
+  "Buy generic brands for household items and medication.",
+];
+
+const getRandomTip = () => FINANCIAL_TIPS[Math.floor(Math.random() * FINANCIAL_TIPS.length)];
+
+const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;
+
+export const processQuery = (query: string): string => {
+  const lowerQuery = query.toLowerCase();
+  const transactions = getTransactions();
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const lastMonthDate = new Date();
+  lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+  const lastMonth = lastMonthDate.toISOString().slice(0, 7);
+
+  const monthTransactions = transactions.filter(t => t.date.startsWith(currentMonth));
+  const lastMonthTransactions = transactions.filter(t => t.date.startsWith(lastMonth));
+
+  // Greeting
+  if (lowerQuery.includes('hello') || lowerQuery.includes('hi')) {
+    return "Hello! I'm your AI Financial Assistant. Ask me about your spending, budget, or savings goals!";
+  }
+
+  // Help
+  if (lowerQuery.includes('help')) {
+    return `I can help you with:
+    
+• "How much did I spend on [category] last month?"
+• "What's my largest expense?"
+• "Show me my recurring bills"
+• "Am I overspending?"
+• "What's my financial health score?"
+• "Give me a financial tip"`;
+  }
+
+  // Largest Expense
+  if (lowerQuery.includes('largest expense') || lowerQuery.includes('biggest spend')) {
+    const expenses = monthTransactions.filter(t => t.type === 'expense');
+    if (expenses.length === 0) return "You haven't recorded any expenses this month.";
+
+    const largest = expenses.reduce((prev, current) => (prev.amount > current.amount) ? prev : current);
+    return `Your largest expense this month was ${formatCurrency(largest.amount)} for "${largest.description}" (${largest.category}) on ${largest.date}.`;
+  }
+
+  // Recurring Transactions
+  if (lowerQuery.includes('recurring') || lowerQuery.includes('subscription')) {
+    const recurring = transactions.filter(t => t.isRecurring && t.type === 'expense');
+    if (recurring.length === 0) return "You don't have any recurring expenses set up.";
+
+    const totalRecurring = recurring.reduce((sum, t) => sum + t.amount, 0);
+    let response = `You have ${recurring.length} recurring expenses totaling ${formatCurrency(totalRecurring)}/month:\n\n`;
+    const unique = new Map();
+    recurring.forEach(t => {
+      if (!unique.has(t.description)) unique.set(t.description, t);
+    });
+
+    unique.forEach(t => {
+      response += `• ${t.description}: ${formatCurrency(t.amount)} (${t.recurringInterval})\n`;
+    });
+    return response;
+  }
+
+  // Spending by category (Time-aware)
+  if (lowerQuery.includes('spend') || lowerQuery.includes('spent')) {
+    const targetTransactions = lowerQuery.includes('last month') ? lastMonthTransactions : monthTransactions;
+    const periodName = lowerQuery.includes('last month') ? 'last month' : 'this month';
+
+    // Total spending
+    if (lowerQuery.includes('total') || lowerQuery.includes('how much did i spend')) {
+      const total = getTotalExpenses(targetTransactions);
+      return `You spent a total of ${formatCurrency(total)} ${periodName}.`;
+    }
+
+    // Category specific
+    const categories = ['food', 'transport', 'entertainment', 'bills', 'shopping', 'healthcare', 'salary', 'income'];
+    for (const cat of categories) {
+      if (lowerQuery.includes(cat)) {
+        const expenses = getExpensesByCategory(targetTransactions);
+        const fullCategory = Object.keys(expenses).find(k => k.toLowerCase().includes(cat));
+
+        if (fullCategory) {
+          return `You spent ${formatCurrency(expenses[fullCategory])} on ${fullCategory} ${periodName}.`;
+        } else {
+          return `You didn't spend anything on ${cat} ${periodName}.`;
+        }
+      }
+    }
+  }
+
+  // Budget status
+  if (lowerQuery.includes('budget')) {
+    const budgets = getBudgets().filter(b => b.month === currentMonth);
+    if (budgets.length === 0) {
+      return "You haven't set any budgets for this month yet.";
+    }
+
+    let response = 'Your budget status:\n\n';
+    budgets.forEach(b => {
+      const percentage = (b.spent / b.limit) * 100;
+      const status = percentage > 100 ? '⚠️ Over budget!' : percentage > 80 ? '⚡ Close to limit' : '✅ On track';
+      response += `• ${b.category}: $${b.spent}/$${b.limit} (${percentage.toFixed(0)}%) ${status}\n`;
+    });
+    return response;
+  }
+
+  // Overspending check
+  if (lowerQuery.includes('overspend') || lowerQuery.includes('spending too much')) {
+    const spikes = detectSpendingSpikes(transactions);
+    const wasteful = detectWastefulExpenses(transactions);
+
+    if (spikes.length === 0 && wasteful.length === 0) {
+      return "Good news! Your spending patterns look healthy. Keep it up!";
+    }
+
+    let response = '';
+    if (spikes.length > 0) {
+      response += '⚠️ Spending alerts:\n\n';
+      spikes.forEach(spike => {
+        response += `• ${spike}\n`;
+      });
+    }
+
+    if (wasteful.length > 0) {
+      response += '\n💡 Potential savings opportunities:\n\n';
+      wasteful.forEach(w => {
+        response += `• ${w.category}: $${w.amount.toFixed(2)} - ${w.description}\n`;
+      });
+    }
+
+    return response;
+  }
+
+  // Financial health score
+  if (lowerQuery.includes('health')) {
+    const score = calculateFinancialHealthScore();
+    let rating = '';
+    if (score.score >= 80) rating = 'Excellent! 🌟';
+    else if (score.score >= 60) rating = 'Good 👍';
+    else if (score.score >= 40) rating = 'Fair ⚠️';
+    else rating = 'Needs Improvement 📉';
+
+    return `Your Financial Health Score: ${score.score}/100 - ${rating}\n\nSavings Ratio: ${score.savingsRatio}/30\nBudget Adherence: ${score.budgetAdherence}/30\nExpense Stability: ${score.expenseVolatility}/20\nGoal Progress: ${score.goalConsistency}/20`;
+  }
+
+  // Savings goals
+  if (lowerQuery.includes('goal')) {
+    const goals = getGoals();
+    if (goals.length === 0) return "You haven't set any savings goals yet.";
+
+    let response = 'Your savings goals:\n\n';
+    goals.forEach(goal => {
+      const progress = (goal.currentAmount / goal.targetAmount) * 100;
+      response += `• ${goal.name}: ${formatCurrency(goal.currentAmount)}/${formatCurrency(goal.targetAmount)} (${progress.toFixed(0)}%)\n`;
+    });
+    return response;
+  }
+
+  // Tips
+  if (lowerQuery.includes('tip') || lowerQuery.includes('advice')) {
+    return `💡 Financial Tip: ${getRandomTip()}`;
+  }
+
+  // Default response
+  return `I'm not sure how to help with that. Try asking:\n\n• "What's my largest expense?"\n• "How much did I spend on food?"\n• "Show my budget"\n• "Give me a tip"`;
+};
+```
+
+---
+
+## 8. `notifications.ts` (Notifications Engine)
+**Description:** Initializes and schedules local notifications using Capacitor; sends budget alerts when thresholds are crossed.
+
+```typescript
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { Budget } from '../types';
+
+export const initializeNotifications = async () => {
+    try {
+        const permissions = await LocalNotifications.checkPermissions();
+        if (permissions.display !== 'granted') {
+            await LocalNotifications.requestPermissions();
+        }
+
+        // Schedule daily reminder if not already scheduled
+        await scheduleDailyReminder();
+    } catch (error) {
+        console.error('Error initializing notifications:', error);
+    }
+};
+
+export const scheduleDailyReminder = async () => {
+    try {
+        const pending = await LocalNotifications.getPending();
+        const hasDaily = pending.notifications.some(n => n.id === 1001);
+
+        if (!hasDaily) {
+            await LocalNotifications.schedule({
+                notifications: [
+                    {
+                        title: 'Record your expenses',
+                        body: 'Don\'t forget to log your transactions for today!',
+                        id: 1001,
+                        schedule: {
+                            on: { hour: 20, minute: 0 }, // 8 PM
+                            repeats: true,
+                        },
+                        actionTypeId: '',
+                        extra: null
+                    }
+                ]
+            });
+            console.log('Daily reminder scheduled');
+        }
+    } catch (error) {
+        console.error('Error scheduling daily reminder:', error);
+    }
+};
+
+export const sendBudgetAlert = async (budget: Budget, spent: number) => {
+    try {
+        const percentage = (spent / budget.limit) * 100;
+        // Unique ID based on budget ID to avoid spamming multiple identical alerts? 
+        // Or just a random one. Let's use a hash of budget ID + date to show it once per day? 
+        // For simplicity, just send it. The user might want to know immediately.
+        
+        await LocalNotifications.schedule({
+            notifications: [
+                {
+                    title: 'Budget Alert ⚠️',
+                    body: `You've used ${percentage.toFixed(0)}% of your ${budget.category} budget! ($${spent} / $${budget.limit})`,
+                    id: Math.floor(Math.random() * 100000) + 2000, 
+                    schedule: { at: new Date(Date.now() + 1000) }, // 1 second later
+                    actionTypeId: '',
+                    extra: null
+                }
+            ]
+        });
+    } catch (error) {
+        console.error('Error sending budget alert:', error);
+    }
+};
+```
+
+---
+
+## 9. `recurring.ts` (Recurring Transactions Engine)
+**Description:** Scans stored transactions and generates new entries for recurring items based on interval (daily, weekly, monthly, yearly).
+
+```typescript
+import { Transaction } from '../types';
+import { addTransaction, getTransactions } from './storage';
+
+export const checkAndGenerateRecurringTransactions = () => {
+    const transactions = getTransactions();
+    const recurringTransactions = transactions.filter((t) => t.isRecurring);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let newTransactionsCount = 0;
+
+    recurringTransactions.forEach((transaction) => {
+        // Determine the interval. Default to monthly if not specified (backward compatibility)
+        const interval = transaction.recurringInterval || 'monthly';
+        const lastDate = new Date(transaction.date);
+        lastDate.setHours(0, 0, 0, 0);
+
+        let nextDate = new Date(lastDate);
+
+        // Calculate next occurrence based on interval
+        switch (interval) {
+            case 'daily':
+                nextDate.setDate(nextDate.getDate() + 1);
+                break;
+            case 'weekly':
+                nextDate.setDate(nextDate.getDate() + 7);
+                break;
+            case 'monthly':
+                nextDate.setMonth(nextDate.getMonth() + 1);
+                break;
+            case 'yearly':
+                nextDate.setFullYear(nextDate.getFullYear() + 1);
+                break;
+        }
+
+        // If the next calculated date is today or in the past, and we haven't already linked a transaction for this date
+        // Note: To strictly prevent duplicates, we should check if a transaction with the same description/amount/type exists on the calculated 'nextDate'.
+        // A more robust way would be to store 'lastRecurringProcessed' date on the parent transaction, but for now we'll check for existence.
+
+        if (nextDate <= today) {
+            const nextDateStr = nextDate.toISOString().split('T')[0];
+
+            // Check if we already have a transaction like this on that date
+            const exists = transactions.some(t =>
+                t.description === transaction.description &&
+                t.amount === transaction.amount &&
+                t.type === transaction.type &&
+                t.date === nextDateStr
+            );
+
+            if (!exists) {
+                const newTransaction: Transaction = {
+                    ...transaction,
+                    id: Date.now().toString() + Math.random().toString(36).substr(2, 9), // Unique ID
+                    date: nextDateStr,
+                    isRecurring: true, // The new one is also recurring, so it propagates? 
+                    // Requirement check: Usually the copy should be recurring to keep the chain going, 
+                    // OR the original stays as the 'master' and generates copies. 
+                    // For simple implementation: The NEW transaction becomes the new seed. 
+                    // But we need to be careful not to double count if the old one is still kept as "active recurring".
+                    // improved logic: The OLD one is the record of the past. The NEW one is the record of the present.
+                    // Both stay "isRecurring: true" so the chain continues from the *latest* one.
+                    // However, this means we scan ALL history. OIf user has 5 years of data, we scan 60 salary entries.
+                    // Opt: Only scan the *latest* occurrence of a recurring series? 
+                    // Current approach: Scan all. If next date > today, skip. If next date <= today and not exists, create.
+                    // This handles "catching up" if app wasn't opened for a few months? 
+                    // No, simple logic only adds ONE step forward. 
+                    // To catch up multiple months, we'd need a while loop.
+                    // Let's stick to generating *one* step forward for now to avoid accidental flooding.
+                    recurringInterval: interval
+                };
+
+                addTransaction(newTransaction);
+                newTransactionsCount++;
+            }
+        }
+    });
+
+    if (newTransactionsCount > 0) {
+        console.log(`Generated ${newTransactionsCount} recurring transactions.`);
+    }
+};
+```
+
+---
+
+## 10. `Layout.tsx` (Main UI Layout)
+**Description:** Implements sidebar/mobile navigation, header, and outlet for rendering pages. Essential for overall application structure.
+
+```tsx
+import { Link, Outlet, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  Receipt,
+  PieChart,
+  Target,
+  Bot,
+  User as UserIcon,
+} from 'lucide-react';
+
+export function Layout() {
+  const location = useLocation();
+
+  const navItems = [
+    { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { path: '/transactions', icon: Receipt, label: 'Transactions' },
+    { path: '/analytics', icon: PieChart, label: 'Analytics' },
+    { path: '/goals', icon: Target, label: 'Goals' },
+    { path: '/assistant', icon: Bot, label: 'AI' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar - Desktop */}
+      <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
+        <div className="flex min-h-0 flex-1 flex-col bg-white border-r border-gray-200">
+          <div className="flex flex-1 flex-col overflow-y-auto pt-5 pb-4">
+            <div className="flex items-center flex-shrink-0 px-4">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
+                  <Receipt className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="font-bold text-lg">Expenzo</h1>
+                  <p className="text-xs text-gray-500">Smart Finance</p>
+                </div>
+              </div>
+            </div>
+            <nav className="mt-8 flex-1 space-y-1 px-2">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = location.pathname === item.path;
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className={`group flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors ${isActive
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                      }`}
+                  >
+                    <Icon
+                      className={`mr-3 h-5 w-5 flex-shrink-0 ${isActive ? 'text-blue-600' : 'text-gray-400 group-hover:text-gray-500'
+                        }`}
+                    />
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+          <div className="flex flex-shrink-0 border-t border-gray-200 p-4">
+            {/* Profile Link in Sidebar Footer */}
+            <Link
+              to="/profile"
+              className={`group flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${location.pathname === '/profile'
+                ? 'bg-blue-50 text-blue-600'
+                : 'text-gray-700 hover:bg-gray-50'
+                }`}
+            >
+              <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center mr-3 text-gray-500">
+                <UserIcon className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="font-medium">My Profile</p>
+                <p className="text-xs text-gray-500">Manage account</p>
+              </div>
+            </Link>
+          </div>
+        </div>
+      </aside>
+
+      {/* Mobile Top Header */}
+      <div className="md:hidden fixed top-0 left-0 right-0 bg-white border-b border-gray-200 z-10 flex items-center px-4 pt-[max(env(safe-area-inset-top),1.5rem)] h-[calc(4rem+max(env(safe-area-inset-top),1.5rem))]">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex.items-center justify-center">
+            <Receipt className="w-5 h-5 text-white" />
+          </div>
+          <h1 className="font-bold text-lg">ExpenseTracker</h1>
+        </div>
+        <div className="ml-auto">
+          <Link to="/profile">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${location.pathname === '/profile' ? 'bg-blue-100' : 'bg-gray-100'}`}>...
+```
+(Note: truncated to keep file size reasonable; layout continues similarly.)
+
+---
+
+## 11. `Login.tsx` (Authentication UI)
+**Description:** Handles email/password sign-in, sign-up, Google login and demo user; stores user info and initializes demo data.
+
+```tsx
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { saveUser, initializeDemoData } from '../utils/storage';
+import { User } from '../types';
+import { Receipt, Mail, Lock, LogIn, UserPlus } from 'lucide-react';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup
+} from 'firebase/auth';
+import { auth, googleProvider } from '../utils/firebase';
+import { toast } from 'sonner';
+
+export function Login() {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      toast.error('Please enter both email and password');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+        toast.success('Account created successfully!');
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+        toast.success('Logged in successfully!');
+      }
+      initializeDemoData();
+      navigate('/');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || 'Authentication failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setIsLoading(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+      toast.success('Logged in with Google successfully!');
+      initializeDemoData();
+      navigate('/');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || 'Google sign-in failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDemoLogin = () => {
+    const user: User = {
+      id: '1',
+      email: 'demo@expenzodemo.com',
+      name: 'Demo User',
+      currency: 'USD',
+      monthlyIncome: 5000,
+      salaryDay: 1,
+    };
+
+    saveUser(user);
+    initializeDemoData();
+    navigate('/');
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4">
+      <div className="w-full max-w-md">
+        {/* Logo and Title */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl mb-4">
+            <Receipt className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900">Expenzo</h1>
+          <p className="text-gray-600 mt-2">Intelligent Expense Management & Savings Assistant</p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{isSignUp ? 'Create Account' : 'Welcome Back'}</CardTitle>
+            <CardDescription>
+              {isSignUp
+                ? 'Join Expenzo to manage your finances'
+                : 'Sign in to manage your finances smartly'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="your@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="pl-10"
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="pl-10"
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? (
+                  'Processing...'
+                ) : isSignUp ? (
+                  <>
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    Sign Up
+                  </>
+                ) : (
+                  <>
+                    <LogIn className="w-4 h-4 mr-2" />
+                    Sign In
+                  </>
+                )}
+              </Button>
+            </form>
+
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={() => setIsSignUp(!isSignUp)}
+                className="text-sm text-blue-600 hover:underline"
+                disabled={isLoading}
+              >
+                {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+              </button>
+            </div>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200"></div>
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-white text-gray-500">Or continue with</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={handleGoogleLogin}
+                disabled={isLoading}
+              >
+                <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
+                  <path
+                    fill="currentColor"
+                    d="M22.56 12.25c0-.78-.07-1.53-.20-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="currentColor"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.70 23 12 23z"
+                  />
+                  <path
+                    fill="currentColor"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"
+                  />
+                  <path
+                    fill="currentColor"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.70 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.60 3.30-4.53 6.16-4.53z"
+                  />
+                </svg>
+                Google
+              </Button>
+
+              <Button variant="ghost" className="w-full" onClick={handleDemoLogin} disabled={isLoading}>
+                Demo user
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+*(Additional pages such as `Dashboard.tsx`, `Analytics.tsx`, or others can be included similarly if needed, but are left out for brevity.)*
+
+---
+
+**Usage:** Copy relevant sections into your report as needed; this file collects the core logic and user interface modules that power the Intelligent Expense Management App.
