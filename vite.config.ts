@@ -10,6 +10,20 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  server: {
+    proxy: {
+      '/nvidia-api': {
+        target: 'https://integrate.api.nvidia.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/nvidia-api/, ''),
+      },
+      '/frankfurter-api': {
+        target: 'https://api.frankfurter.app',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/frankfurter-api/, ''),
+      },
+    },
+  },
   build: {
     minify: false,
     emptyOutDir: true,

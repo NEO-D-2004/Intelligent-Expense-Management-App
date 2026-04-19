@@ -8,6 +8,10 @@ import {
   detectSpendingSpikes,
   detectWastefulExpenses,
 } from './analytics';
+import { callNvidiaApi } from './ai';
+
+const NVIDIA_API_KEY = import.meta.env.VITE_NVIDIA_API_KEY;
+console.log('[AI Config] NVIDIA API Key Detected:', !!NVIDIA_API_KEY ? 'YES' : 'NO');
 
 const FINANCIAL_TIPS = [
   "Track every expense, no matter how small. Small expenses add up!",
@@ -34,7 +38,71 @@ const formatCurrency = (amount: number) => {
   return formatCurrencyUtil(converted, targetCurrency);
 };
 
-export const processQuery = (query: string): string => {
+const generateContextSummary = () => {
+  const user = getUser();
+  const transactions = getTransactions();
+  const budgets = getBudgets();
+  const goals = getGoals();
+  const healthScore = calculateFinancialHealthScore();
+  
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const monthTransactions = transactions.filter(t => t.date.startsWith(currentMonth));
+  
+  const totalIncome = getTotalIncome(monthTransactions);
+  const totalExpenses = getTotalExpenses(monthTransactions);
+  const categories = getExpensesByCategory(monthTransactions);
+  
+  return `
+    User Profile: ${user?.name || 'User'}, Currency: ${user?.currency || 'USD'}
+    Last 30 Days: Income: ${formatCurrency(totalIncome)}, Expenses: ${formatCurrency(totalExpenses)}
+    Financial Health Score: ${healthScore.score}/100
+    Overspent Categories: ${Object.entries(categories)
+      .filter(([cat]) => {
+        const b = budgets.find(bu => bu.category === cat);
+        return b && categories[cat] > b.limit;
+      })
+      .map(([cat]) => cat).join(', ') || 'None'}
+    Active Goals: ${goals.map(g => `${g.name} (${(g.currentAmount/g.targetAmount*100).toFixed(0)}%)`).join(', ') || 'None'}
+    Recent Transactions (Last 5):
+    ${transactions.slice(0, 5).map(t => `- ${t.date}: ${t.description} (${formatCurrency(t.amount)})`).join('\n')}
+  `;
+};
+
+export const processQuery = async (query: string, history: any[] = []): Promise<string> => {
+  if (!NVIDIA_API_KEY) {
+    return processQueryLocal(query);
+  }
+
+  try {
+    const context = generateContextSummary();
+    const messages = [
+      {
+        role: 'system',
+        content: `You are Expenzo, a smart and encouraging AI Financial Assistant. 
+        Your goal is to analyze the user's financial data and provide actionable, friendly advice. 
+        Keep your responses concise, helpful, and localized to their currency.
+        
+        Current Financial Context:
+        ${context}
+        
+        Guidelines:
+        - If they ask about spending, look at headers like 'Last 30 Days'.
+        - If they are overspending, suggest ways to save.
+        - Be ultra-specific when mentioning categories or goals based on the context above.
+        - If you don't have enough data to answer specifically, give general financial best practices.`
+      },
+      ...history.slice(-4), // Include last 2 exchanges for continuity
+      { role: 'user', content: query }
+    ];
+
+    return await callNvidiaApi(messages, { temperature: 0.6, max_tokens: 512 });
+  } catch (error: any) {
+    console.error('NVIDIA AI Error (Falling back to local):', error.message || error);
+    return processQueryLocal(query);
+  }
+};
+
+const processQueryLocal = (query: string): string => {
   const lowerQuery = query.toLowerCase();
   const transactions = getTransactions();
   const currentMonth = new Date().toISOString().slice(0, 7);
@@ -45,8 +113,8 @@ export const processQuery = (query: string): string => {
   const monthTransactions = transactions.filter(t => t.date.startsWith(currentMonth));
   const lastMonthTransactions = transactions.filter(t => t.date.startsWith(lastMonth));
 
-  // Greeting
-  if (lowerQuery.includes('hello') || lowerQuery.includes('hi')) {
+  // Greeting - use regex with word boundaries to avoid matching "hi" inside "habits"
+  if (/\b(hi|hello|hey)\b/i.test(lowerQuery)) {
     return "Hello! I'm your AI Financial Assistant. Ask me about your spending, budget, or savings goals!";
   }
 

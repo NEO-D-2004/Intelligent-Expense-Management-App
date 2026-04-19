@@ -1,3 +1,4 @@
+import { CapacitorHttp } from '@capacitor/core';
 export const CURRENCY_MAP: Record<string, { symbol: string; label: string; locale: string }> = {
   USD: { symbol: '$', label: 'USD ($)', locale: 'en-US' },
   EUR: { symbol: '€', label: 'EUR (€)', locale: 'de-DE' },
@@ -32,10 +33,17 @@ export const fetchExchangeRates = async (): Promise<ExchangeRates> => {
             }
         }
 
-        const response = await fetch('https://api.frankfurter.app/latest?from=USD&symbols=EUR,GBP,INR,JPY');
-        if (!response.ok) throw new Error('Failed to fetch rates');
+        const url = import.meta.env.DEV 
+            ? `${window.location.origin}/frankfurter-api/latest?from=USD&symbols=EUR,GBP,INR,JPY` 
+            : 'https://api.frankfurter.app/latest?from=USD&symbols=EUR,GBP,INR,JPY';
+
+        const response = await CapacitorHttp.get({ url });
         
-        const data = await response.json();
+        if (response.status < 200 || response.status >= 300) {
+            throw new Error('Failed to fetch rates');
+        }
+        
+        const data = response.data;
         const rates = { USD: 1, ...data.rates };
         
         localStorage.setItem(CACHE_KEY, JSON.stringify({

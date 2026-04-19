@@ -4,7 +4,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { processQuery } from '../utils/aiAssistant';
-import { Bot, Send, Sparkles, HelpCircle } from 'lucide-react';
+import { startListening, speakText, stopSpeaking, isVoiceSupported, stopListening } from '../utils/voice';
+import { Bot, Send, Sparkles, HelpCircle, Mic, MicOff } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -24,7 +25,9 @@ export function Assistant() {
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const wasLastMessageVoiceRef = useRef(false);
 
   const quickQuestions = [
     'How much did I spend this month?',
@@ -43,33 +46,97 @@ export function Assistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleSendMessage = (message?: string) => {
+  const handleVoiceInput = async () => {
+    if (isListening) {
+        await stopListening();
+        setIsListening(false);
+        return;
+    }
+    
+    stopSpeaking(); // Stop any ongoing AI speech
+    setIsListening(true);
+    wasLastMessageVoiceRef.current = true;
+
+    startListening(
+        (text) => {
+            setInput(text);
+        },
+        (error) => {
+            console.error(error);
+            setIsListening(false);
+        },
+        () => {
+            setIsListening(false);
+            // On end, if we got text, auto-send it
+            // We use a small timeout to ensure the state has updated
+            setTimeout(() => {
+                const submitBtn = document.getElementById('chat-submit-btn');
+                if (submitBtn && !submitBtn.hasAttribute('disabled')) {
+                    submitBtn.click();
+                }
+            }, 100);
+        }
+    );
+  };
+
+  const handleSendMessage = async (message?: string) => {
     const userMessage = message || input.trim();
     if (!userMessage) return;
 
-    // Add user message
+    // Track if this manual message was NOT from voice
+    if (message) wasLastMessageVoiceRef.current = false;
+
+    // Add user message immediately
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
       content: userMessage,
       timestamp: new Date(),
     };
+    
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setIsTyping(true);
+    stopSpeaking(); // Stop speaking if they send a new message
 
-    // Simulate thinking delay
-    setTimeout(() => {
-      const response = processQuery(userMessage);
+    try {
+      // Map existing messages to OpenAI format for memory
+      const history = messages.map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      const response = await processQuery(userMessage, history);
+      
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: response,
         timestamp: new Date(),
       };
+      
+      
       setMessages((prev) => [...prev, assistantMsg]);
+
+      // If the user used their voice to ask, reply with voice
+      if (wasLastMessageVoiceRef.current) {
+          speakText(response);
+      }
+      
+      wasLastMessageVoiceRef.current = false;
+
+    } catch (error) {
+      const errorText = "I'm sorry, I'm having trouble connecting to my brain right now. Please check your internet connection or API key.";
+      const errorMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: errorText,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
       setIsTyping(false);
-    }, 500);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -174,14 +241,29 @@ export function Assistant() {
         {/* Input Area */}
         <div className="border-t p-4">
           <div className="flex gap-2">
+            {isVoiceSupported() && (
+                <Button 
+                    variant={isListening ? "destructive" : "secondary"} 
+                    onClick={handleVoiceInput}
+                    className={`transition-all ${isListening ? 'animate-pulse' : ''}`}
+                    title="Use Voice Input"
+                >
+                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </Button>
+            )}
             <Input
-              placeholder="Ask me about your spending, budgets, or goals..."
+              id="chat-input-field"
+              placeholder={isListening ? "Listening..." : "Ask me about your spending, budgets, or goals..."}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                  setInput(e.target.value);
+                  wasLastMessageVoiceRef.current = false; // Cancel voice mode tracking if they type manually
+              }}
               onKeyPress={handleKeyPress}
               className="flex-1"
+              disabled={isListening}
             />
-            <Button onClick={() => handleSendMessage()} disabled={!input.trim()}>
+            <Button id="chat-submit-btn" onClick={() => handleSendMessage()} disabled={!input.trim() || isListening}>
               <Send className="w-4 h-4" />
             </Button>
           </div>
